@@ -8,6 +8,7 @@ use Mago\Sdk\Exception\InvalidArgumentException;
 use Mago\Sdk\Internal\Syntax\LiteralStringStore;
 use Mago\Sdk\Internal\Syntax\NodeStore;
 use Mago\Sdk\Internal\Syntax\ResolvedNameStore;
+use Mago\Sdk\Internal\Syntax\ScopeStore;
 use Mago\Sdk\Internal\Syntax\TriviaStore;
 use Mago\Sdk\PHPVersion;
 use Mago\Sdk\Span;
@@ -37,6 +38,11 @@ final class SourceFile
     private ?array $targetNodes = null;
 
     /**
+     * @var null|array<int<0, 4294967295>, int<0, max>>
+     */
+    private ?array $targetIndices = null;
+
+    /**
      * @param array<int, int<0, 4294967295>> $targetNodeIds
      * @internal
      * @mago-expect lint:excessive-parameter-list
@@ -50,6 +56,7 @@ final class SourceFile
         private readonly ResolvedNameStore $resolvedNames,
         private readonly TriviaStore $trivia,
         private readonly ?LiteralStringStore $literalStrings,
+        private readonly ScopeStore $scopes,
     ) {
         $this->targetNodeIds = $targetNodeIds;
     }
@@ -168,6 +175,33 @@ final class SourceFile
         }
 
         return substr($this->contents, $span->start, $span->length());
+    }
+
+    /**
+     * The name the class-like declaration enclosing a target resolves to.
+     *
+     * Sent beside the target, so it answers for a *target node* only; `null` for
+     * any other node, at file level, and inside an anonymous class. Linter rules
+     * should prefer `LintContext::getEnclosingClassName()`.
+     */
+    public function getEnclosingClassName(Node $node): ?string
+    {
+        if ($this->targetIndices === null) {
+            // Counted, not `array_flip()`ed: `unpack()` keys the target list from one
+            // for several targets and from zero for exactly one.
+            $indices = [];
+            $position = 0;
+            foreach ($this->targetNodeIds as $identifier) {
+                $indices[$identifier] = $position;
+                ++$position;
+            }
+
+            $this->targetIndices = $indices;
+        }
+
+        $index = $this->targetIndices[$node->id] ?? null;
+
+        return $index === null ? null : $this->scopes->find($index);
     }
 
     public function getResolvedName(Node|Span $selection): ?ResolvedName

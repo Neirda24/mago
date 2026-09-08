@@ -413,6 +413,8 @@ pub(super) mod testing {
         pub nodes: Vec<DecodedNode>,
         pub names: Vec<(u32, u32, Vec<u8>, bool)>,
         pub trivia: Vec<(String, u32, u32)>,
+        /// Enclosing class name per target, in the same order as `targets`.
+        pub target_scopes: Vec<Option<Vec<u8>>>,
     }
 
     pub fn describe_response(identifier: &str, name: &str, version: &str, rules: &[RuleDescription<'_>]) -> Vec<u8> {
@@ -579,8 +581,28 @@ pub(super) mod testing {
             trivia.push((kind.to_owned(), reader.read_u32("trivia start")?, reader.read_u32("trivia end")?));
         }
 
+        let scope_count = reader.read_u32("scope count")? as usize;
+        let mut scope_records = Vec::with_capacity(scope_count);
+        for _ in 0..scope_count {
+            scope_records.push((reader.read_u32("scope offset")? as usize, reader.read_u32("scope length")? as usize));
+        }
+
+        let scopes_buffer = reader.read_bytes("enclosing class names")?;
+        let mut target_scopes = Vec::with_capacity(scope_count);
+        for (offset, length) in scope_records {
+            if length == 0 {
+                target_scopes.push(None);
+                continue;
+            }
+
+            let name = scopes_buffer
+                .get(offset..offset + length)
+                .ok_or_else(|| protocol("enclosing class name points outside the name buffer"))?;
+            target_scopes.push(Some(name.to_vec()));
+        }
+
         reader.finish()?;
-        Ok(DecodedRequest { file_name, source, active_rules, targets, nodes, names, trivia })
+        Ok(DecodedRequest { file_name, source, active_rules, targets, nodes, names, trivia, target_scopes })
     }
 
     fn optional_string(writer: &mut PayloadWriter, value: Option<&str>) {

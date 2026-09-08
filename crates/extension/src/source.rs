@@ -1,5 +1,7 @@
 //! Compact syntax snapshots shared by external linter and analyzer protocols.
 
+use std::collections::HashMap;
+
 use mago_names::ResolvedNames;
 use mago_span::HasSpan;
 use mago_syntax::cst::Node;
@@ -25,6 +27,12 @@ pub const TRIVIA_RECORD_SIZE: usize = 9;
 
 /// Width of one packed decoded-literal-string record.
 pub const LITERAL_STRING_RECORD_SIZE: usize = 12;
+
+/// Width of one packed enclosing-scope record, one per target.
+pub const SCOPE_RECORD_SIZE: usize = 8;
+
+/// A node, its parent's snapshot identifier, and the scope inherited from above.
+type SubtreeFrame<'ast, 'arena> = (Node<'ast, 'arena>, Option<u32>, Option<&'arena [u8]>);
 
 /// Writes the ordered node-kind table used to validate SDK compatibility.
 pub fn write_node_kind_table(writer: &mut PayloadWriter) {
@@ -53,9 +61,31 @@ struct SnapshotNode {
 pub struct SourceSnapshot<'arena> {
     nodes: Vec<SnapshotNode>,
     targets: Vec<u32>,
+    /// Resolved name of the class-like declaration enclosing each target, in the
+    /// same order as `targets`. `None` at file level and in an anonymous class.
+    target_scopes: Vec<Option<&'arena [u8]>>,
     names: Vec<(u32, u32, &'arena [u8], bool)>,
     trivia: Vec<(u8, u32, u32)>,
     literal_strings: Vec<(u32, &'arena [u8])>,
+}
+
+/// The name a class-like declaration resolves to, when `node` is one.
+///
+/// `Some(name)` for a named declaration and `Some(None)` for an anonymous class,
+/// whose members are not in the class around it either. `None` means `node` is
+/// not a boundary, so the surrounding scope carries through.
+fn class_like_boundary<'arena>(
+    node: Node<'_, 'arena>,
+    resolved_names: &ResolvedNames<'arena>,
+) -> Option<Option<&'arena [u8]>> {
+    match node {
+        Node::Class(declaration) => Some(resolved_names.resolve(&declaration.name)),
+        Node::Interface(declaration) => Some(resolved_names.resolve(&declaration.name)),
+        Node::Trait(declaration) => Some(resolved_names.resolve(&declaration.name)),
+        Node::Enum(declaration) => Some(resolved_names.resolve(&declaration.name)),
+        Node::AnonymousClass(_) => Some(None),
+        _ => None,
+    }
 }
 
 impl<'arena> SourceSnapshot<'arena> {
@@ -114,13 +144,17 @@ impl<'arena> SourceSnapshot<'arena> {
     ) -> Result<Self, PayloadError> {
         let mut nodes = Vec::new();
         let mut targets = Vec::new();
+        let mut target_scopes = Vec::new();
         let mut literal_strings = Vec::new();
         let mut stack = Vec::with_capacity(64);
         Self::append_subtree(
             Node::Program(program),
+            None,
+            resolved_names,
             &mut is_target,
             &mut nodes,
             &mut targets,
+            &mut target_scopes,
             &mut literal_strings,
             include_literal_strings,
             &mut stack,
@@ -129,7 +163,7 @@ impl<'arena> SourceSnapshot<'arena> {
         let mut names = resolved_names.iter().collect::<Vec<_>>();
         names.sort_unstable_by_key(|(start, end, _, _)| (*start, *end));
 
-        Ok(Self { nodes, targets, names, trivia: collect_trivia(program), literal_strings })
+        Ok(Self { nodes, targets, target_scopes, names, trivia: collect_trivia(program), literal_strings })
     }
 
     /// Builds only syntax subtrees needed by active external linter rules.
@@ -170,20 +204,24 @@ impl<'arena> SourceSnapshot<'arena> {
     ) -> Result<Option<Self>, PayloadError> {
         let mut nodes = Vec::new();
         let mut targets = Vec::new();
+        let mut target_scopes = Vec::new();
         let mut included_ranges = Vec::new();
         let mut stack = Vec::with_capacity(64);
         let mut subtree_stack = Vec::with_capacity(64);
-        stack.push(Node::Program(program));
-        while let Some(node) = stack.pop() {
+        stack.push((Node::Program(program), None));
+        while let Some((node, scope)) = stack.pop() {
             let target_configuration = target(node);
             if target_configuration == Some(true) {
                 let span = node.span();
                 included_ranges.push((span.start.offset, span.end.offset));
                 Self::append_subtree(
                     node,
+                    scope,
+                    resolved_names,
                     &mut |child| target(child).is_some(),
                     &mut nodes,
                     &mut targets,
+                    &mut target_scopes,
                     &mut Vec::new(),
                     false,
                     &mut subtree_stack,
@@ -206,10 +244,12 @@ impl<'arena> SourceSnapshot<'arena> {
                     last_child: None,
                 });
                 targets.push(identifier);
+                target_scopes.push(scope);
             }
 
+            let child_scope = class_like_boundary(node, resolved_names).unwrap_or(scope);
             let start = stack.len();
-            node.visit_children(|child| stack.push(child));
+            node.visit_children(|child| stack.push((child, child_scope)));
             stack[start..].reverse();
         }
 
@@ -232,23 +272,28 @@ impl<'arena> SourceSnapshot<'arena> {
         Ok(Some(Self {
             nodes,
             targets,
+            target_scopes,
             names,
             trivia: if include_trivia { collect_trivia(program) } else { Vec::new() },
             literal_strings: Vec::new(),
         }))
     }
 
+    #[expect(clippy::too_many_arguments, reason = "one packed snapshot, built in a single pass")]
     fn append_subtree<'ast>(
         root: Node<'ast, 'arena>,
+        root_scope: Option<&'arena [u8]>,
+        resolved_names: &ResolvedNames<'arena>,
         is_target: &mut impl FnMut(Node<'ast, 'arena>) -> bool,
         nodes: &mut Vec<SnapshotNode>,
         targets: &mut Vec<u32>,
+        target_scopes: &mut Vec<Option<&'arena [u8]>>,
         literal_strings: &mut Vec<(u32, &'arena [u8])>,
         include_literal_strings: bool,
-        stack: &mut Vec<(Node<'ast, 'arena>, Option<u32>)>,
+        stack: &mut Vec<SubtreeFrame<'ast, 'arena>>,
     ) -> Result<(), PayloadError> {
-        stack.push((root, None));
-        while let Some((node, parent)) = stack.pop() {
+        stack.push((root, None, root_scope));
+        while let Some((node, parent, scope)) = stack.pop() {
             let identifier =
                 u32::try_from(nodes.len()).map_err(|_| PayloadError::LengthOverflow { length: nodes.len() })?;
             let span = node.span();
@@ -280,10 +325,12 @@ impl<'arena> SourceSnapshot<'arena> {
 
             if is_target(node) {
                 targets.push(identifier);
+                target_scopes.push(scope);
             }
 
+            let child_scope = class_like_boundary(node, resolved_names).unwrap_or(scope);
             let start = stack.len();
-            node.visit_children(|child| stack.push((child, Some(identifier))));
+            node.visit_children(|child| stack.push((child, Some(identifier), child_scope)));
             stack[start..].reverse();
         }
 
@@ -362,6 +409,32 @@ impl<'arena> SourceSnapshot<'arena> {
             writer.write_u32(*end);
         }
 
+        // One record per target, offsets into a shared blob. Names are deduplicated
+        // because every target in a class repeats the same one; a zero length means
+        // no enclosing class, which a resolved name never is.
+        let mut blob: Vec<u8> = Vec::new();
+        let mut offsets: HashMap<&[u8], (usize, usize)> = HashMap::new();
+        writer.write_length(self.target_scopes.len())?;
+        let mut records = Vec::with_capacity(self.target_scopes.len());
+        for scope in &self.target_scopes {
+            records.push(match scope {
+                Some(name) => *offsets.entry(name).or_insert_with(|| {
+                    let offset = blob.len();
+                    blob.extend_from_slice(name);
+                    (offset, name.len())
+                }),
+                None => (0, 0),
+            });
+        }
+
+        for (offset, length) in records {
+            writer.write_length(offset)?;
+            writer.write_length(length)?;
+        }
+
+        writer.write_length(blob.len())?;
+        writer.write_raw(&blob);
+
         Ok(())
     }
 
@@ -377,6 +450,10 @@ impl<'arena> SourceSnapshot<'arena> {
             .saturating_add(self.names.iter().map(|(_, _, name, _)| name.len()).sum::<usize>())
             .saturating_add(4)
             .saturating_add(self.trivia.len().saturating_mul(TRIVIA_RECORD_SIZE))
+            .saturating_add(4)
+            .saturating_add(self.target_scopes.len().saturating_mul(SCOPE_RECORD_SIZE))
+            .saturating_add(4)
+            .saturating_add(self.target_scopes.iter().flatten().map(|name| name.len()).sum::<usize>())
     }
 
     #[must_use]
