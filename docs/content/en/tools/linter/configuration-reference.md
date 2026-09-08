@@ -51,7 +51,19 @@ excludes = ["database/migrations/**"]  # additionally excluded from the linter o
 
 ## `[linter.rules]`
 
-Each key under this table is a rule code, written in `kebab-case`. Every rule accepts the common options below; some rules also accept their own.
+Each key under this table is a rule code. A built-in rule is written in `kebab-case`; a rule provided by an extension is written with its extension prefix and quoted, because the code contains a slash. Every built-in rule accepts the common options below; some also accept their own.
+
+```toml
+[linter.rules]
+cyclomatic-complexity = { threshold = 20 }
+"acme/prefer-interpolation" = { enabled = true, level = "warning" }
+```
+
+A key that is neither a known built-in rule nor an extension code is refused, with the near matches suggested:
+
+```
+Unknown `[linter.rules]` entry: `cyclomatic-complexit` (did you mean `cyclomatic-complexity`?).
+```
 
 ### Common options
 
@@ -84,6 +96,23 @@ Per-rule `exclude` is not the same as `[linter].excludes`:
 
 - `[linter].excludes` removes files from every rule.
 - A rule's own `exclude` removes files from that one rule. Other rules still apply.
+
+### Extension rule codes
+
+A rule registered by an extension is configured by its full code. Two options apply, and both override what the rule's `RuleDefinition` declares:
+
+```toml
+[linter.rules]
+# Switch on a rule the extension ships disabled
+"acme/prefer-interpolation" = { enabled = true }
+
+# Downgrade a rule for a legacy codebase without touching the extension
+"acme/no-service-locator" = { level = "warning" }
+```
+
+`enabled` is the only way to reach a rule declaring `defaultEnabled: false` from configuration; `mago lint --only acme/prefer-interpolation` still selects one for a single run. `level` is the only way to change an external rule's severity at all.
+
+Options *specific* to an extension rule are not configured here — an extension rule has no schema Mago can validate against — so `exclude` and rule-specific keys are rejected for these codes. Put those in the worker entrypoint instead, as described under [writing linter rules](/extensions/linter/overview/). Run `mago extension list` to see the codes your extensions register.
 
 ### Rule-specific options
 

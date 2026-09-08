@@ -5,6 +5,7 @@
 //! stable flat syntax tree, comments, and resolved names. Node callbacks are
 //! dispatched inside the worker rather than crossing IPC one node at a time.
 
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -23,6 +24,7 @@ use mago_syntax::cst::NodeKind;
 use mago_syntax::cst::Program;
 
 use crate::rule::AnyRule;
+use crate::settings::ExternalRuleSettings;
 use crate::settings::Settings;
 
 pub use error::ExternalLintError;
@@ -103,6 +105,8 @@ struct Backend<T> {
     transport: Arc<T>,
     registration: Registration,
     default_plan: ActiveRulePlan,
+    /// Effective severity per rule, indexed like `registration.rules`.
+    levels: Box<[Level]>,
 }
 
 #[derive(Debug)]
@@ -179,6 +183,39 @@ impl<T> ExternalLinter<T> {
 }
 
 impl<T> ExternalLinter<T> {
+    /// Applies the `[linter.rules]` entries that name extension rule codes,
+    /// overriding the `defaultEnabled` and `defaultLevel` the extension declares.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a backend registers more rules than the protocol's
+    /// rule index can address.
+    pub fn with_rule_settings(
+        mut self,
+        settings: &BTreeMap<String, ExternalRuleSettings>,
+    ) -> Result<Self, ExternalLintError> {
+        if settings.is_empty() {
+            return Ok(self);
+        }
+
+        for backend in &mut self.backends {
+            backend.default_plan = ActiveRulePlan::build(&backend.registration.rules, |rule| {
+                settings.get(&rule.code).and_then(|rule_settings| rule_settings.enabled).unwrap_or(rule.default_enabled)
+            })?;
+
+            backend.levels = backend
+                .registration
+                .rules
+                .iter()
+                .map(|rule| {
+                    settings.get(&rule.code).and_then(|rule_settings| rule_settings.level).unwrap_or(rule.default_level)
+                })
+                .collect();
+        }
+
+        Ok(self)
+    }
+
     pub(crate) fn lint<'arena>(
         &self,
         file: &File,
@@ -278,13 +315,18 @@ impl<T> ExternalLinter<T> {
                 self.telemetry.response_bytes.fetch_add(response.len() as u64, Ordering::Relaxed);
             }
             let decode_start = self.trace_enabled.then(Instant::now);
-            let backend_issues =
-                protocol::decode_lint_response(&response, file, &backend.registration.rules, active_rule_indices)
-                    .inspect_err(|_| {
-                        if self.trace_enabled {
-                            self.telemetry.errors.fetch_add(1, Ordering::Relaxed);
-                        }
-                    })?;
+            let backend_issues = protocol::decode_lint_response(
+                &response,
+                file,
+                &backend.registration.rules,
+                &backend.levels,
+                active_rule_indices,
+            )
+            .inspect_err(|_| {
+                if self.trace_enabled {
+                    self.telemetry.errors.fetch_add(1, Ordering::Relaxed);
+                }
+            })?;
             if let Some(start) = decode_start {
                 let elapsed = duration_nanos(start.elapsed());
                 file_decode_ns = file_decode_ns.saturating_add(elapsed);
@@ -383,7 +425,8 @@ impl<T> ExternalLinter<T> {
                 );
             }
             let default_plan = ActiveRulePlan::build(&registration.rules, |rule| rule.default_enabled)?;
-            backends.push(Backend { transport, registration, default_plan });
+            let levels = registration.rules.iter().map(|rule| rule.default_level).collect();
+            backends.push(Backend { transport, registration, default_plan, levels });
         }
 
         let linter = Self {
@@ -589,6 +632,130 @@ mod tests {
 
         assert!(issues.is_empty());
         assert!(transport.request.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn configuration_enables_a_rule_that_ships_disabled_and_sets_its_level() {
+        let source = b"<?php\nrun();\n";
+        let arena = LocalArena::new();
+        let file = File::ephemeral(Cow::Borrowed(b"src/test.php"), Cow::Borrowed(source));
+        let program = parse_file(&arena, &file);
+        let resolved_names = NameResolver::new(&arena).resolve(program);
+        let transport = Arc::new(MockTransport {
+            registration: testing::describe_response(
+                "acme/tools",
+                "Acme Tools",
+                "1.0.0",
+                &[(
+                    "acme/off-by-default",
+                    "Off by default",
+                    "Ships disabled.",
+                    Level::Warning,
+                    false,
+                    &[NodeKind::FunctionCall],
+                )],
+            ),
+            response: testing::lint_response(&[(
+                0,
+                Issue::warning("Reported").with_code("acme/off-by-default").with_annotation(
+                    Annotation::primary(Span::new(file.id, mago_span::Position::new(6), mago_span::Position::new(11)))
+                        .with_message("Here"),
+                ),
+            )]),
+            request: Mutex::new(None),
+            workers: 1,
+        });
+
+        // Without settings, a rule shipping `defaultEnabled: false` does not run,
+        // and nothing is even sent to the worker.
+        let external = ExternalLinter::initialize_transports([Arc::clone(&transport)], PHPVersion::PHP85)
+            .expect("registration should succeed");
+        let issues = external.lint(&file, program, &resolved_names, None).expect("external lint should succeed");
+        assert_eq!(issues.len(), 0);
+        assert!(transport.request.lock().unwrap().is_none(), "no request is worth sending");
+
+        // `[linter.rules]` turns it on and picks the severity.
+        let settings = BTreeMap::from([(
+            "acme/off-by-default".to_owned(),
+            ExternalRuleSettings { enabled: Some(true), level: Some(Level::Error) },
+        )]);
+        let external = ExternalLinter::initialize_transports([Arc::clone(&transport)], PHPVersion::PHP85)
+            .expect("registration should succeed")
+            .with_rule_settings(&settings)
+            .expect("rule settings should apply");
+
+        let issues = external.lint(&file, program, &resolved_names, None).expect("external lint should succeed");
+        let issue = issues.iter().next().expect("the rule should report");
+        assert_eq!(issue.code.as_deref(), Some("acme/off-by-default"));
+        assert_eq!(issue.level, Level::Error, "the configured level replaces the rule's default");
+    }
+
+    #[test]
+    fn a_configured_level_survives_only() {
+        let source = b"<?php\nrun();\n";
+        let arena = LocalArena::new();
+        let file = File::ephemeral(Cow::Borrowed(b"src/test.php"), Cow::Borrowed(source));
+        let program = parse_file(&arena, &file);
+        let resolved_names = NameResolver::new(&arena).resolve(program);
+        let transport = Arc::new(MockTransport {
+            registration: testing::describe_response(
+                "acme/tools",
+                "Acme Tools",
+                "1.0.0",
+                &[("acme/on", "On", "Ships enabled.", Level::Warning, true, &[NodeKind::FunctionCall])],
+            ),
+            response: testing::lint_response(&[(
+                0,
+                Issue::warning("Reported").with_code("acme/on").with_annotation(
+                    Annotation::primary(Span::new(file.id, mago_span::Position::new(6), mago_span::Position::new(11)))
+                        .with_message("Here"),
+                ),
+            )]),
+            request: Mutex::new(None),
+            workers: 1,
+        });
+        let settings =
+            BTreeMap::from([("acme/on".to_owned(), ExternalRuleSettings { enabled: None, level: Some(Level::Error) })]);
+        let external = ExternalLinter::initialize_transports([Arc::clone(&transport)], PHPVersion::PHP85)
+            .expect("registration should succeed")
+            .with_rule_settings(&settings)
+            .expect("rule settings should apply");
+
+        // `--only` replaces which rules run, not the severity they report at.
+        let only = vec!["acme/on".to_owned()];
+        let issues = external.lint(&file, program, &resolved_names, Some(&only)).expect("external lint should succeed");
+
+        assert_eq!(issues.iter().next().expect("the rule should report").level, Level::Error);
+    }
+
+    #[test]
+    fn configuration_disables_a_rule_that_ships_enabled() {
+        let source = b"<?php\nrun();\n";
+        let arena = LocalArena::new();
+        let file = File::ephemeral(Cow::Borrowed(b"src/test.php"), Cow::Borrowed(source));
+        let program = parse_file(&arena, &file);
+        let resolved_names = NameResolver::new(&arena).resolve(program);
+        let transport = Arc::new(MockTransport {
+            registration: testing::describe_response(
+                "acme/tools",
+                "Acme Tools",
+                "1.0.0",
+                &[("acme/on", "On", "Ships enabled.", Level::Warning, true, &[NodeKind::FunctionCall])],
+            ),
+            response: testing::lint_response(&[]),
+            request: Mutex::new(None),
+            workers: 1,
+        });
+        let settings =
+            BTreeMap::from([("acme/on".to_owned(), ExternalRuleSettings { enabled: Some(false), level: None })]);
+        let external = ExternalLinter::initialize_transports([Arc::clone(&transport)], PHPVersion::PHP85)
+            .expect("registration should succeed")
+            .with_rule_settings(&settings)
+            .expect("rule settings should apply");
+
+        external.lint(&file, program, &resolved_names, None).expect("external lint should succeed");
+
+        assert!(transport.request.lock().unwrap().is_none(), "a disabled rule is not dispatched");
     }
 
     #[test]

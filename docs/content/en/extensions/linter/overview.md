@@ -37,7 +37,14 @@ flowchart TB
 
 ## Activation
 
-`RuleDefinition::$defaultEnabled` controls normal `mago lint` activation. `mago lint --only vendor/rule-code` selects an external rule explicitly regardless of its default.
+`RuleDefinition::$defaultEnabled` and `$defaultLevel` are the extension's defaults. A consuming project overrides both by rule code in `mago.toml`:
+
+```toml
+[linter.rules]
+"vendor/rule-code" = { enabled = true, level = "warning" }
+```
+
+`mago lint --only vendor/rule-code` still selects a rule explicitly for one run, regardless of either.
 
 Use the extension command to inspect external rules:
 
@@ -48,7 +55,7 @@ mago extension list --json
 
 The built-in `mago lint --list-rules` and `--explain` registry currently describe native rules. External rule descriptions are advertised through `mago extension list`.
 
-External rule-specific configuration beyond selection and registration defaults is not currently passed to PHP callbacks. Put extension options in the worker entrypoint or extension factory:
+Beyond `enabled` and `level`, rule-specific configuration is not passed to PHP callbacks. Put extension options in the worker entrypoint or extension factory:
 
 ```php
 (new Worker(

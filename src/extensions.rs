@@ -8,6 +8,7 @@ use mago_analyzer::external::ExternalAnalyzerHandle;
 use mago_extension::WorkerPool;
 use mago_linter::external::ExternalLintError;
 use mago_linter::external::ExternalLinter;
+use mago_linter::settings::ExternalRuleSettings;
 use mago_orchestrator::OrchestratorError;
 use mago_php_version::PHPVersion;
 
@@ -67,6 +68,7 @@ pub(crate) fn initialize_external_linter(
     extension_hosts: &BTreeMap<String, ExtensionHostConfiguration>,
     php_version: PHPVersion,
     mago_threads: usize,
+    rule_settings: &BTreeMap<String, ExternalRuleSettings>,
 ) -> Result<Option<ExternalLinter>, ExternalLintError> {
     let trace_start = tracing::enabled!(tracing::Level::TRACE).then(Instant::now);
     tracing::trace!(
@@ -84,7 +86,7 @@ pub(crate) fn initialize_external_linter(
         return Ok(None);
     }
 
-    let linter = ExternalLinter::initialize(pools, php_version)?;
+    let linter = ExternalLinter::initialize(pools, php_version)?.with_rule_settings(rule_settings)?;
     if let Some(start) = trace_start {
         tracing::trace!(
             extensions = linter.extensions().len(),
@@ -147,6 +149,7 @@ pub(crate) fn initialize_external_extensions(
     mago_threads: usize,
     enabled_plugins: &[String],
     disable_defaults: bool,
+    rule_settings: &BTreeMap<String, ExternalRuleSettings>,
 ) -> Result<Option<(ExternalLinter, ExternalAnalyzer)>, OrchestratorError> {
     let pools: Vec<Arc<WorkerPool>> =
         spawn_extension_pools(extension_hosts, mago_threads, "extension", ExternalLintError::Protocol)?;
@@ -155,7 +158,7 @@ pub(crate) fn initialize_external_extensions(
         return Ok(None);
     }
 
-    let linter = ExternalLinter::initialize(pools.clone(), php_version)?;
+    let linter = ExternalLinter::initialize(pools.clone(), php_version)?.with_rule_settings(rule_settings)?;
     let analyzer = ExternalAnalyzer::initialize(pools, php_version, enabled_plugins, disable_defaults)?;
 
     Ok(Some((linter, analyzer)))

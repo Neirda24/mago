@@ -61,6 +61,7 @@ impl ExtensionCommand {
             mago_threads,
             enabled_plugins,
             disable_defaults,
+            &configuration.linter.rules.external,
         )?;
 
         match self.command {

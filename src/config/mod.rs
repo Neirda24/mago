@@ -732,6 +732,16 @@ impl Configuration {
             host.normalize(name, &extension_host_base).map_err(Error::InvalidExtensionHostConfiguration)?;
         }
 
+        // `deny_unknown_fields` cannot coexist with the flattened extension-code map,
+        // so a misspelled built-in name is rejected here rather than by serde.
+        let unknown = self.linter.rules.unknown_rule_names();
+        if !unknown.is_empty() {
+            let known = built_in_rule_names();
+            return Err(Error::UnknownLinterRules(
+                unknown.into_iter().map(|name| (name.to_owned(), resembling_names(name, &known))).collect(),
+            ));
+        }
+
         if let Some(b) = self.analyzer.baseline.take() {
             let resolved = if b.is_relative() { self.source.workspace.join(&b) } else { b };
             tracing::debug!("Analyzer baseline configuration from {}.", resolved.display());
@@ -1132,6 +1142,63 @@ environment = { APP_ENV = "test" }
         assert_eq!(config.source.excludes, vec!["vendor", "node_modules", "build"]);
     }
 
+    fn try_load_isolated(file: &Path) -> Result<Configuration, Error> {
+        temp_env::with_vars(
+            [
+                ("HOME", None::<&str>),
+                ("XDG_CONFIG_HOME", None),
+                ("MAGO_THREADS", None),
+                ("MAGO_PHP_VERSION", None),
+                ("MAGO_ALLOW_UNSUPPORTED_PHP_VERSION", None),
+            ],
+            || Configuration::load(None, Some(file), None, None, false, false),
+        )
+    }
+
+    #[test]
+    fn test_linter_rules_accepts_an_extension_rule_code() {
+        let dir = temp_dir().join("linter-rules-extension-code");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        write_file(
+            &dir.join("mago.toml"),
+            "[linter.rules]\ncyclomatic-complexity = { threshold = 6 }\n\
+             \"acme/prefer-interpolation\" = { enabled = true, level = \"error\" }\n",
+        );
+
+        let config = load_isolated(&dir.join("mago.toml"));
+        let rule = config.linter.rules.for_external_rule("acme/prefer-interpolation").expect("code is accepted");
+
+        assert_eq!(rule.enabled, Some(true));
+        assert_eq!(rule.level, Some(mago_reporting::Level::Error));
+        // The built-in rule beside it still deserializes into its typed field.
+        assert_eq!(config.linter.rules.cyclomatic_complexity.config.threshold, 6);
+        assert!(config.linter.rules.unknown_rule_names().is_empty());
+    }
+
+    #[test]
+    fn test_linter_rules_still_rejects_a_misspelled_built_in_rule() {
+        let dir = temp_dir().join("linter-rules-typo");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        write_file(&dir.join("mago.toml"), "[linter.rules]\ncyclomatic-complexit = { enabled = false }\n");
+
+        let error = try_load_isolated(&dir.join("mago.toml")).expect_err("a misspelled rule is refused");
+        let Error::UnknownLinterRules(entries) = &error else {
+            panic!("expected an unknown-rule error, got {error:?}");
+        };
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0, "cyclomatic-complexit");
+        assert!(
+            entries[0].1.contains(&"cyclomatic-complexity".to_owned()),
+            "the near match is suggested: {:?}",
+            entries[0].1
+        );
+    }
+
     #[test]
     fn test_extends_cycle_is_detected() {
         let dir = temp_dir().join("extends-cycle");
@@ -1461,6 +1528,39 @@ fn merge_into(target: &mut Value, source: Value) {
             *target = source;
         }
     }
+}
+
+/// Every built-in linter rule name, read from the generated schema so it cannot
+/// drift from the settings struct.
+fn built_in_rule_names() -> Vec<String> {
+    let schema = serde_json::to_value(schemars::schema_for!(mago_linter::settings::RulesSettings))
+        .unwrap_or_else(|_| Value::Null);
+
+    schema
+        .get("properties")
+        .and_then(Value::as_object)
+        .map(|properties| properties.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// Built-in rule names close enough to `name` to suggest: one contains the
+/// other, or they share a long enough prefix that a typo is the likely cause.
+fn resembling_names(name: &str, known: &[String]) -> Vec<String> {
+    const SHARED_PREFIX: usize = 5;
+
+    let mut suggestions = known
+        .iter()
+        .filter(|candidate| {
+            candidate.contains(name)
+                || name.contains(candidate.as_str())
+                || candidate.as_bytes().iter().zip(name.as_bytes()).take_while(|(left, right)| left == right).count()
+                    >= SHARED_PREFIX
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+
+    suggestions.truncate(3);
+    suggestions
 }
 
 fn json_value_kind(v: &Value) -> &'static str {
