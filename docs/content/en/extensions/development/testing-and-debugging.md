@@ -125,7 +125,20 @@ mago extension list
 mago extension list --json
 ```
 
-`extension validate` exercises host startup and linter registration. `extension list` reports hosts, logical extensions, and linter rules; it does not currently list analyzer plugins. Run an analyzer fixture to validate analyzer registration, plugin selection, targets, and capabilities.
+`extension validate` exercises host startup and both registrations, and reports how many linter rules and analyzer plugins were advertised. `extension list` reports hosts, logical extensions, linter rules, and analyzer plugins:
+
+```
+Registered extensions:
+Conventions (acme/conventions)
+  Version: 1.2.0
+  Linter rules: 1
+    acme/prefer-interpolation (error)
+  Analyzer plugins: 2
+    acme/doctrine (enabled) — 2 hook(s): node-analysis, after-analysis
+    acme/symfony-security (not enabled; add it to analyzer.plugins) — 1 hook(s): node-analysis
+```
+
+Read the state in parentheses before anything else. `analyzer.plugins` is opt-in, so a plugin that is registered and validated still never runs unless the configuration selects it or it declares `defaultEnabled: true` — and that silence is the most common reason an extension looks like it does nothing. The same fields are in `--json` under `analyzer-plugins`, including `enabled`, `default-enabled`, `aliases`, and `hooks`.
 
 Every worker in one pool must register identical extension identifiers, rule definitions, plugin selectors, targets, and capabilities. Do not make registration depend on a process ID, random value, request order, or mutable remote service.
 

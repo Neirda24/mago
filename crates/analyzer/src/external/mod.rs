@@ -351,6 +351,36 @@ impl ExternalPlugin {
     fn matches(&self, name: &str) -> bool {
         self.identifier.eq_ignore_ascii_case(name) || self.aliases.iter().any(|alias| alias.eq_ignore_ascii_case(name))
     }
+
+    /// Whether this plugin runs under the given `analyzer.plugins` selection.
+    ///
+    /// A registered plugin that this answers `false` for is loaded and validated
+    /// and then never invoked, which is the most common way an extension appears
+    /// to do nothing.
+    #[must_use]
+    pub fn is_enabled_by(&self, enabled_plugins: &[String], disable_defaults: bool) -> bool {
+        enabled_plugins.iter().any(|name| self.matches(name)) || (!disable_defaults && self.default_enabled)
+    }
+
+    /// The names of the hook families this plugin advertises.
+    #[must_use]
+    pub fn hooks(&self) -> Vec<&'static str> {
+        let mut hooks = Vec::new();
+        for (advertised, name) in [
+            (self.initialization, "initialization"),
+            (self.before_analysis, "before-analysis"),
+            (self.node_analysis, "node-analysis"),
+            (self.after_file_analysis, "after-file-analysis"),
+            (self.after_file_expression_types, "after-file-expression-types"),
+            (self.after_analysis, "after-analysis"),
+        ] {
+            if advertised {
+                hooks.push(name);
+            }
+        }
+
+        hooks
+    }
 }
 
 impl Registration {
@@ -3090,10 +3120,7 @@ where
             let enabled = registration
                 .plugins
                 .iter()
-                .filter(|plugin| {
-                    enabled_plugins.iter().any(|name| plugin.matches(name))
-                        || (!disable_defaults && plugin.default_enabled)
-                })
+                .filter(|plugin| plugin.is_enabled_by(enabled_plugins, disable_defaults))
                 .map(|plugin| plugin.index)
                 .collect::<HashSet<_>>();
 
