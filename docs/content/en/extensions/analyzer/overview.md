@@ -65,7 +65,7 @@ disable-default-plugins = true
 plugins = ["acme/framework"]
 ```
 
-Use `mago extension list` to inspect configured hosts, logical extensions, and linter rules. The command does not currently print analyzer plugins; run `mago analyze` to exercise analyzer registration and plugin selection.
+Use `mago extension list` to inspect configured hosts, logical extensions, linter rules, and analyzer plugins. Each plugin is listed with its hook families and whether the current configuration actually enables it, which is the fastest way to catch a plugin that is registered but missing from `analyzer.plugins`.
 
 ## Registration surface
 
