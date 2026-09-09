@@ -1,7 +1,10 @@
+use std::collections::BTreeMap;
+
 use schemars::JsonSchema;
 
 use mago_database::GlobSettings;
 use mago_php_version::PHPVersion;
+use mago_reporting::Level;
 
 use crate::integration::IntegrationSet;
 use crate::rule::AmbiguousConstantAccessConfig;
@@ -224,10 +227,33 @@ pub struct RuleSettings<C: Config> {
     pub config: C,
 }
 
+/// Settings for a rule provided by an extension, keyed by its code.
+///
+/// An extension rule has no options of its own to configure, so only these two
+/// switches are accepted. Both default to what its `RuleDefinition` declares.
 #[derive(Debug, Clone, Default, JsonSchema)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(default, rename_all = "kebab-case", deny_unknown_fields))]
+pub struct ExternalRuleSettings {
+    /// Overrides the rule's `defaultEnabled`.
+    pub enabled: Option<bool>,
+
+    /// Overrides the rule's `defaultLevel`.
+    pub level: Option<Level>,
+}
+
+#[derive(Debug, Clone, Default, JsonSchema)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(default, rename_all = "kebab-case"))]
 pub struct RulesSettings {
+    /// Settings for rules provided by extensions, keyed by rule code.
+    ///
+    /// A code contains a `/`, which is what tells it apart from a misspelled
+    /// built-in name. serde cannot combine a flattened map with
+    /// `deny_unknown_fields`, so that check lives in [`Self::unknown_rule_names`].
+    #[cfg_attr(feature = "serde", serde(flatten))]
+    pub external: BTreeMap<String, ExternalRuleSettings>,
+
     pub ambiguous_constant_access: RuleSettings<AmbiguousConstantAccessConfig>,
     pub ambiguous_function_call: RuleSettings<AmbiguousFunctionCallConfig>,
     pub use_dedicated_expectation: RuleSettings<UseDedicatedExpectationConfig>,
@@ -418,6 +444,21 @@ pub struct RulesSettings {
     pub no_roles_as_capabilities: RuleSettings<NoRolesAsCapabilitiesConfig>,
     pub missing_docs: RuleSettings<MissingDocsConfig>,
     pub no_literal_namespace_string: RuleSettings<NoLiteralNamespaceStringConfig>,
+}
+
+impl RulesSettings {
+    /// Keys under `[linter.rules]` naming neither a built-in nor an extension
+    /// rule: anything in the flattened map without a `/` is a misspelled name.
+    #[must_use]
+    pub fn unknown_rule_names(&self) -> Vec<&str> {
+        self.external.keys().filter(|code| !code.contains('/')).map(String::as_str).collect()
+    }
+
+    /// The settings declared for one extension rule code.
+    #[must_use]
+    pub fn for_external_rule(&self, code: &str) -> Option<&ExternalRuleSettings> {
+        self.external.get(code)
+    }
 }
 
 impl<C: Config> RuleSettings<C> {

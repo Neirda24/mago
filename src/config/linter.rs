@@ -69,7 +69,14 @@ impl LinterConfiguration {
     #[must_use]
     pub fn to_filtered_value(&self, php_version: PHPVersion) -> serde_json::Value {
         let integrations = IntegrationSet::from_slice(&self.integrations);
-        let filtered_rules = filter_rules_settings(&self.rules, php_version, integrations);
+        let mut filtered_rules = filter_rules_settings(&self.rules, php_version, integrations);
+        // Extension rule codes are not part of the generated rule list, so they have to
+        // be added back or `mago config` would not show settings the user wrote.
+        for (code, rule) in &self.rules.external {
+            if let Ok(value) = serde_json::to_value(rule) {
+                filtered_rules.insert(code.clone(), value);
+            }
+        }
 
         serde_json::json!({
             "excludes": self.excludes,

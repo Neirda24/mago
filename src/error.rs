@@ -110,6 +110,11 @@ pub enum Error {
     /// An external extension host has an invalid configuration.
     InvalidExtensionHostConfiguration(String),
 
+    /// A `[linter.rules]` key names neither a built-in rule nor an extension rule.
+    ///
+    /// Each entry is the offending key and the built-in names that resemble it.
+    UnknownLinterRules(Vec<(String, Vec<String>)>),
+
     /// The `extends` field had an unsupported shape (must be a string or an array of strings).
     InvalidExtendsEntry { path: PathBuf, reason: String },
 
@@ -323,6 +328,27 @@ impl std::fmt::Display for Error {
                 write!(f, "Configuration `extends` chain cycles back on `{}`", path.display())
             }
             Self::InvalidExtensionHostConfiguration(message) => f.write_str(message),
+            Self::UnknownLinterRules(entries) => {
+                write!(f, "Unknown `[linter.rules]` {}: ", if entries.len() == 1 { "entry" } else { "entries" },)?;
+
+                for (index, (name, suggestions)) in entries.iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(", ")?;
+                    }
+
+                    write!(f, "`{name}`")?;
+                    if !suggestions.is_empty() {
+                        write!(f, " (did you mean `{}`?)", suggestions.join("` or `"))?;
+                    }
+                }
+
+                f.write_str(
+                    ". A built-in rule is written in kebab-case, and a rule provided by an extension \
+                     is written with its extension prefix, as in `acme/prefer-interpolation`. \
+                     `mago config --schema` lists every built-in rule; `mago extension list` lists \
+                     the codes your extensions register",
+                )
+            }
             Self::InvalidExtendsEntry { path, reason } => {
                 write!(f, "Invalid `extends` declaration in `{}`: {reason}", path.display())
             }
@@ -407,6 +433,7 @@ impl std::error::Error for Error {
             Self::UnsupportedConfigExtension(_) => None,
             Self::EnvVarParse { source, .. } => Some(source.as_ref()),
             Self::CircularExtends(_) => None,
+            Self::UnknownLinterRules(_) => None,
             Self::InvalidExtensionHostConfiguration(_) => None,
             Self::InvalidExtendsEntry { .. } => None,
             Self::ExtendsTargetNotFound { source, .. } => Some(source),

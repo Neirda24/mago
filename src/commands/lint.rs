@@ -266,13 +266,14 @@ impl LintCommand {
 
         let load_database_start = trace_enabled.then(Instant::now);
         let extension_hosts = &configuration.extension_hosts;
+        let external_rule_settings = &configuration.linter.rules.external;
         let extension_host_enabled = extension_hosts.values().any(|host| host.enabled);
         let worker_count = configuration.threads;
         let php_version = configuration.php_version;
         let (mut database, external_linter) = std::thread::scope(|scope| -> Result<_, Error> {
             let external_linter = extension_host_enabled.then(|| {
                 scope.spawn(move || {
-                    initialize_external_linter(extension_hosts, php_version, worker_count)
+                    initialize_external_linter(extension_hosts, php_version, worker_count, external_rule_settings)
                         .map_err(mago_orchestrator::OrchestratorError::from)
                 })
             });
