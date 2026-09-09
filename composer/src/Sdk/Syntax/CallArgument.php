@@ -12,7 +12,10 @@ namespace Mago\Sdk\Syntax;
 final class CallArgument
 {
     /**
-     * @param non-negative-int $index Source-order index in the containing call.
+     * @param non-negative-int $index Source-order index in the containing argument list, named arguments included.
+     * @param non-negative-int|null $position Index among the positional arguments only, `null` when named.
+     *                                        `f($a, b: $b, $c)` gives `$c` index 2 and position 1.
+     * @mago-expect lint:excessive-parameter-list
      */
     public function __construct(
         public readonly int $index,
@@ -20,5 +23,6 @@ final class CallArgument
         public readonly Node $value,
         public readonly ?string $name,
         public readonly bool $unpacked,
+        public readonly ?int $position = null,
     ) {}
 }
