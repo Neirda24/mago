@@ -23,19 +23,33 @@ const SOURCE: &[u8] = br#"<?php
 
 namespace App;
 
-function report(array $rest): void
+use Acme\Security\IsGranted;
+
+final class Controller
 {
-    describe('first', 'second', subject: 'named');
-    spread(...$rest);
+    #[IsGranted('ROLE_HR', subject: 'invoice', message: 'You need it')]
+    public function promote(): void {}
+
+    #[IsGranted(attribute: 'ROLE_ADMIN')]
+    public function demote(): void {}
+
+    #[Bare, Second('only')]
+    public function bare(): void {}
+
+    public function report(array $rest): void
+    {
+        describe('first', 'second', subject: 'named');
+        spread(...$rest);
+    }
 }
 "#;
 
 /// Drives the real linter so the whole path — Rust snapshot, protocol, PHP
-/// view — is under test.
+/// views — is under test.
 #[test]
-fn external_linter_reads_call_arguments() -> Result<(), Box<dyn std::error::Error>> {
+fn external_linter_reads_attribute_and_call_arguments() -> Result<(), Box<dyn std::error::Error>> {
     let repository = Path::new(env!("CARGO_MANIFEST_DIR"));
-    if !common::php_sdk_is_available(repository, "the external linter call-argument test") {
+    if !common::php_sdk_is_available(repository, "the external linter argument-view test") {
         return Ok(());
     }
 
@@ -64,8 +78,22 @@ fn external_linter_reads_call_arguments() -> Result<(), Box<dyn std::error::Erro
     assert_eq!(
         messages,
         vec![
-            // `argument(0)` and `argument(1)` count positional arguments only, so
-            // the named one in between shifts `$index` but not the position.
+            // One `#[...]` group of two: `fromList()` reads both, and `#[Bare]`
+            // without parentheses is not `#[Bare()]`.
+            "attribute name=Bare resolved=App\\Bare parens=no count=0 [] first=- attribute=-".to_owned(),
+            // Written by name only: there is no first *positional* argument,
+            // and asking for `attribute` finds the value.
+            "attribute name=IsGranted resolved=Acme\\Security\\IsGranted parens=yes count=1 \
+             [0:attribute='ROLE_ADMIN'] first=- attribute='ROLE_ADMIN'"
+                .to_owned(),
+            // `argument(0)` is the positional one; source order is on `$index`.
+            "attribute name=IsGranted resolved=Acme\\Security\\IsGranted parens=yes count=3 \
+             [0:0='ROLE_HR' 1:subject='invoice' 2:message='You need it'] first='ROLE_HR' attribute=-"
+                .to_owned(),
+            "attribute name=Second resolved=App\\Second parens=yes count=1 [0:0='only'] \
+             first='only' attribute=-"
+                .to_owned(),
+            // The same selectors on a call, where index and position diverge.
             "call name=describe count=3 [0:0='first' 1:1='second' 2:subject='named'] first='first' \
              second='second' subject='named'"
                 .to_owned(),

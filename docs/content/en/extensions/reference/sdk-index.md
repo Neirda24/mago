@@ -38,7 +38,8 @@ See [Extensions and workers](/extensions/sdk/extensions-and-workers/) and [Worke
 | `Syntax\ResolvedName` | Resolved semantic name and source span |
 | `Syntax\Trivia`, `Syntax\TriviaKind` | Comments and their lexical kind |
 | `Syntax\CallExpression` | Structured function or method call view |
-| `Syntax\CallArgument` | Structured call argument view |
+| `Syntax\AttributeExpression` | Structured attribute view |
+| `Syntax\CallArgument` | Structured argument view, shared by both |
 
 See [Syntax nodes and source files](/extensions/sdk/syntax-and-source/).
 

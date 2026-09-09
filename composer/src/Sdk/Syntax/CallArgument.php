@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace Mago\Sdk\Syntax;
 
 /**
- * One argument in a Mago call-expression view.
+ * One argument in a Mago call-expression or attribute view.
  *
  * @api
  */

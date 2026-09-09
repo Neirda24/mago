@@ -101,18 +101,47 @@ foreach ($call->arguments as $argument) {
 
 For analyzer providers, prefer the semantic `Invocation` supplied by the provider context. `CallExpression` is primarily useful to syntax-driven linter and analysis hooks.
 
+## Attributes
+
+An attribute is a constructor call, and `AttributeExpression` gives it the same argument view. It exists as a separate entry point because an attribute carries a `PartialArgumentList` where a call carries an `ArgumentList`, which is why `CallExpression::fromNode()` rejects an attribute node:
+
+```php
+$attribute = AttributeExpression::fromNode($source, $node);
+
+$attribute->getName($source);          // as written
+$attribute->getResolvedName($source);  // resolved against imports and namespace
+$attribute->hasArgumentList();         // `#[Foo]` is false, `#[Foo()]` is true
+$attribute->arguments;                 // list<CallArgument>, as for a call
+```
+
+A rule may target `NodeKind::Attribute` for one attribute, or `NodeKind::AttributeList` for everything written in one `#[...]` group:
+
+```php
+foreach (AttributeExpression::fromList($source, $node) as $attribute) {
+    // ...
+}
+```
+
+`fromNode()` throws when its input is not an attribute node; `fromList()` throws when its input is not an attribute-list node.
+
 ## Selecting one argument
 
-`argument()` selects by positional position or by name:
+Both views select an argument by positional position or by name:
+
+```php
+// #[IsGranted('ROLE_HR', subject: 'invoice')] and #[IsGranted(attribute: 'ROLE_HR')]
+$granted = $attribute->argument(0) ?? $attribute->argument('attribute');
+```
+
+An integer selector counts positional arguments only, and matches `CallArgument::$position`. `CallArgument::$index` is the source-order index instead, named arguments included, so the two diverge as soon as a named argument is written before a positional one:
 
 ```php
 // f($a, b: $b, $c)
-$call->argument(1);        // $c — the second positional argument
-$call->argument('b');      // $b — by name
-$call->arguments[1];       // $b — the second *written* argument
+$call->argument(1);  // $c   — the second positional argument
+$call->arguments[1]; // $b   — the second written argument
 ```
 
-An integer selector counts positional arguments only, and matches `CallArgument::$position`. `CallArgument::$index` is the source-order index instead, named arguments included, so the two diverge as soon as a named argument is written before a positional one. A named argument has no position, so `$position` is `null` for it.
+A named argument has no position, so `$position` is `null` for it.
 
 ## Generated node kinds
 
