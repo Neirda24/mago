@@ -140,6 +140,8 @@ Use `$context->getChildren()` when the check depends on the grammar immediately 
 
 `CallExpression::fromNode($context->file, $context->node)` provides call structure, named arguments, unpacking, receivers, and member names for a known call target. It throws for a non-call node; use `fromExpression()` when the input may not be a call. Resolved names remain the preferred way to identify functions and classes.
 
+`AttributeExpression::fromNode($context->file, $context->node)` does the same for an `Attribute` target, and `AttributeExpression::fromList()` for an `AttributeList` target. Both give the same `CallArgument` views, so `argument(0) ?? argument('attribute')` reads a value written positionally or by name. See [Syntax nodes and source files](/extensions/sdk/syntax-and-source/).
+
 ## Reporting and fixes
 
 Call `report()` once per diagnostic. An issue can contain secondary annotations, notes, help, a documentation link, and multiple edits. See [Reporting issues and suggested edits](/extensions/sdk/reporting/).

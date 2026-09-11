@@ -22,8 +22,9 @@ use function str_starts_with;
 final class NodeReader
 {
     /**
-     * Reads an argument list into argument views, in source order. Variants that
-     * hold no value are skipped.
+     * Reads an `ArgumentList` or a `PartialArgumentList` into argument views, in
+     * source order. Placeholder variants (`?`, `...`, `name: ?`) hold no value
+     * and are skipped.
      *
      * @return list<CallArgument>
      */
