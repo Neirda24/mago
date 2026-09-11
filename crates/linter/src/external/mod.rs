@@ -592,6 +592,43 @@ mod tests {
     }
 
     #[test]
+    fn sends_the_enclosing_class_of_every_target() {
+        let source = b"<?php\nnamespace App;\nclass Service {\n  function run(): void { inside(); }\n}\noutside();\n";
+        let arena = LocalArena::new();
+        let file = File::ephemeral(Cow::Borrowed(b"src/test.php"), Cow::Borrowed(source));
+        let program = parse_file(&arena, &file);
+        let resolved_names = NameResolver::new(&arena).resolve(program);
+        let transport = Arc::new(MockTransport {
+            registration: testing::describe_response(
+                "acme/tools",
+                "Acme Tools",
+                "1.0.0",
+                &[("acme/no-call", "No calls", "Disallows calls.", Level::Warning, true, &[NodeKind::FunctionCall])],
+            ),
+            response: testing::lint_response(&[]),
+            request: Mutex::new(None),
+            workers: 1,
+        });
+        let external = ExternalLinter::initialize_transports([Arc::clone(&transport)], PHPVersion::PHP85)
+            .expect("registration should succeed");
+
+        external.lint(&file, program, &resolved_names, None).expect("external lint should succeed");
+
+        let request = transport.request.lock().unwrap();
+        let request = request.as_ref().expect("one request should be captured");
+
+        // A scope travels with every target, in the same order, so an SDK can pair
+        // them by index. The call in the class resolves to the class's own name;
+        // the one at file level has no enclosing class at all.
+        assert_eq!(request.target_scopes.len(), request.targets.len());
+        assert_eq!(
+            request.target_scopes,
+            vec![Some(b"App\\Service".to_vec()), None],
+            "targets are sent in source order"
+        );
+    }
+
+    #[test]
     fn deduplicates_nested_matching_subtrees() {
         let source = b"<?php\nouter(inner());\n";
         let arena = LocalArena::new();

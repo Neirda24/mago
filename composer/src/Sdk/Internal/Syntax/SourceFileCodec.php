@@ -42,6 +42,9 @@ final class SourceFileCodec
         $names = new ResolvedNameStore($nameStarts, $nameRecords, $reader->readBytes(), $nameCount);
         $triviaCount = $reader->readU32();
         $triviaRecords = $reader->readRaw($triviaCount * TriviaStore::RECORD_SIZE);
+        $scopeCount = $reader->readU32();
+        $scopeRecords = $reader->readRaw($scopeCount * ScopeStore::RECORD_SIZE);
+        $scopes = new ScopeStore($scopeRecords, $reader->readBytes(), $scopeCount);
 
         return new SourceFile(
             $phpVersion,
@@ -52,6 +55,7 @@ final class SourceFileCodec
             $names,
             new TriviaStore($triviaRecords, $triviaCount),
             null,
+            $scopes,
         );
     }
 
@@ -76,6 +80,9 @@ final class SourceFileCodec
         $names = new ResolvedNameStore($nameStarts, $nameRecords, $reader->readBytes(), $nameCount);
         $triviaCount = $reader->readU32();
         $triviaRecords = $reader->readRaw($triviaCount * TriviaStore::RECORD_SIZE);
+        $scopeCount = $reader->readU32();
+        $scopeRecords = $reader->readRaw($scopeCount * ScopeStore::RECORD_SIZE);
+        $scopes = new ScopeStore($scopeRecords, $reader->readBytes(), $scopeCount);
         $literalStringCount = $reader->readU32();
         $literalStringRecords = $reader->readRaw($literalStringCount * LiteralStringStore::RECORD_SIZE);
 
@@ -88,6 +95,7 @@ final class SourceFileCodec
             $names,
             new TriviaStore($triviaRecords, $triviaCount),
             new LiteralStringStore($literalStringRecords, $reader->readBytes(), $literalStringCount),
+            $scopes,
         );
     }
 

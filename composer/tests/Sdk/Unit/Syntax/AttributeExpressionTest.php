@@ -7,6 +7,7 @@ namespace Mago\Tests\Sdk\Unit\Syntax;
 use Mago\Sdk\Exception\InvalidArgumentException;
 use Mago\Sdk\Internal\Syntax\NodeStore;
 use Mago\Sdk\Internal\Syntax\ResolvedNameStore;
+use Mago\Sdk\Internal\Syntax\ScopeStore;
 use Mago\Sdk\Internal\Syntax\TriviaStore;
 use Mago\Sdk\PHPVersion;
 use Mago\Sdk\Syntax\AttributeExpression;
@@ -64,6 +65,7 @@ final class AttributeExpressionTest extends TestCase
             new ResolvedNameStore('', '', '', 0),
             new TriviaStore('', 0),
             null,
+            new ScopeStore(pack('N2', 0, 0), '', 1),
         );
     }
 }

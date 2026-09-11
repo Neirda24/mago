@@ -56,4 +56,13 @@ final class LintContext
     {
         return $this->file->getResolvedName($this->node);
     }
+
+    /**
+     * The name the class-like declaration enclosing this target resolves to.
+     * `null` at file level and inside an anonymous class.
+     */
+    public function getEnclosingClassName(): ?string
+    {
+        return $this->file->getEnclosingClassName($this->node);
+    }
 }

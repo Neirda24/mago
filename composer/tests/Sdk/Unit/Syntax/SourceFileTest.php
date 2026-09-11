@@ -7,6 +7,7 @@ namespace Mago\Tests\Sdk\Unit\Syntax;
 use Mago\Sdk\Internal\Syntax\LiteralStringStore;
 use Mago\Sdk\Internal\Syntax\NodeStore;
 use Mago\Sdk\Internal\Syntax\ResolvedNameStore;
+use Mago\Sdk\Internal\Syntax\ScopeStore;
 use Mago\Sdk\Internal\Syntax\TriviaStore;
 use Mago\Sdk\PHPVersion;
 use Mago\Sdk\Syntax\NodeKind;
@@ -42,6 +43,7 @@ final class SourceFileTest extends TestCase
             $nameStore,
             $triviaStore,
             $literalStringStore,
+            new ScopeStore(pack('N2', 0, 4) . pack('N2', 0, 0), 'Acme', 2),
         );
 
         $targets = $sourceFile->getTargetNodes();
@@ -58,5 +60,39 @@ final class SourceFileTest extends TestCase
         self::assertSame('decoded', $sourceFile->getLiteralString($targets[0]));
         self::assertNull($sourceFile->getLiteralString($targets[1]));
         self::assertSame(TriviaKind::DocBlockComment, $sourceFile->getTrivia()[0]->kind);
+        self::assertSame('Acme', $sourceFile->getEnclosingClassName($targets[0]));
+        self::assertNull($sourceFile->getEnclosingClassName($targets[1]));
+        self::assertNull($sourceFile->getEnclosingClassName($sourceFile->getNode(0)));
+    }
+
+    /**
+     * A one-target snapshot is the case that broke: the decoded target list is
+     * keyed by `unpack()`, which numbers from one for several targets and from
+     * zero for exactly one, while scope records are always zero-based.
+     */
+    public function testTheEnclosingClassOfASingleTargetIsFound(): void
+    {
+        $noNode = 4_294_967_295;
+        $nodeStore = new NodeStore(
+            [NodeKind::Program, NodeKind::MethodCall],
+            pack('CNNNNN', 0, 0, 10, $noNode, 1, $noNode) . pack('CNNNNN', 1, 1, 4, 0, $noNode, $noNode),
+            2,
+        );
+        $sourceFile = new SourceFile(
+            PHPVersion::fromParts(8, 1),
+            'fixture.php',
+            '0123456789',
+            [1],
+            $nodeStore,
+            new ResolvedNameStore('', '', '', 0),
+            new TriviaStore('', 0),
+            null,
+            new ScopeStore(pack('N2', 0, 10), 'Acme\\Thing', 1),
+        );
+
+        $target = $sourceFile->getTargetNodes()[0];
+
+        self::assertSame('Acme\\Thing', $sourceFile->getEnclosingClassName($target));
+        self::assertNull($sourceFile->getEnclosingClassName($sourceFile->getNode(0)));
     }
 }

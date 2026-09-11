@@ -58,6 +58,33 @@ if ($resolved !== null) {
 
 Use resolved names instead of manually interpreting namespaces and imports. `getResolvedNames($within)` returns all available names, optionally restricted to a node or span.
 
+## Enclosing class
+
+A filtered snapshot holds each target's own subtree and nothing above it, so `getAncestors()` on a target answers an empty list — the ancestors were never sent. That leaves a rule about a *call* unable to ask the question that usually decides whether the call matters: whose class is this? The name travels beside the target instead:
+
+```php
+$class = $source->getEnclosingClassName($targetNode);  // e.g. App\Controller\InvoiceController
+```
+
+The answer is the resolved name of the nearest enclosing class, interface, trait, or enum. It is `null` in three cases, which are worth telling apart:
+
+- the target is at file level — in a plain function, in a closure outside a class, or directly in the file;
+- its nearest class-like is an anonymous class, which has no name to report and is not the class around it either;
+- the node passed is not a target of the current request, since only targets carry the name.
+
+Because of that last case, a linter rule should ask through its context, which always refers to the node the rule was invoked for:
+
+```php
+public function lint(LintContext $context): void
+{
+    if ($context->getEnclosingClassName() === null) {
+        return; // not interested in calls outside a class
+    }
+}
+```
+
+This is what makes a contextual rule keep its target. The alternative was to subscribe to `NodeKind::Class_` and walk down to the calls, which costs the rule its precision: every rule that needs context becomes a whole-class visitor, and a call in a plain function or a closure at file level stops being seen at all.
+
 ## Literal strings
 
 `getLiteralString(Node $node)` returns the decoded value of an included literal-string node when the protocol supplied a literal table. Codebase-scan snapshots include this table. Linter snapshots, targeted-analysis snapshots, and lazy complete `FileAnalysis` snapshots currently do not, so this method returns `null` for them even when the node is a literal string.

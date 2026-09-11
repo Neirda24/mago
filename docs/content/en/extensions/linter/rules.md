@@ -59,6 +59,7 @@ For each matching node, `lint()` receives:
 | `getChildren()` | Direct children of the target. |
 | `getText()` | Exact target source text. |
 | `getResolvedName()` | Resolved name beginning at the target, when one exists. |
+| `getEnclosingClassName()` | Resolved name of the class, interface, trait, or enum containing the target; `null` at file level or inside an anonymous class. |
 
 Do not retain a `LintContext` after `lint()` returns. Retaining immutable values for a process-local cache is possible, but account for memory use and changing in-memory file contents.
 
@@ -137,6 +138,8 @@ Mago rejects duplicate targets. One syntax node may be visited by several rules,
 ## Traversal
 
 Use `$context->getChildren()` when the check depends on the grammar immediately below the target. For a deeper walk, use `$context->file->getDescendants($context->node)` sparingly: the same descendant may also be delivered as its own target, and repeated subtree walks can create quadratic work.
+
+A rule receives its target's subtree and nothing above it, so `getAncestors()` answers an empty list. Use `$context->getEnclosingClassName()` for the one fact about the surrounding scope that a rule usually needs, and keep the narrow target rather than subscribing to `NodeKind::Class_` to walk back down to it.
 
 `CallExpression::fromNode($context->file, $context->node)` provides call structure, named arguments, unpacking, receivers, and member names for a known call target. It throws for a non-call node; use `fromExpression()` when the input may not be a call. Resolved names remain the preferred way to identify functions and classes.
 
