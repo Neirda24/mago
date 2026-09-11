@@ -90,6 +90,7 @@ $call->getName($source);
 
 foreach ($call->arguments as $argument) {
     $argument->index;
+    $argument->position;
     $argument->name;
     $argument->unpacked;
     $argument->value;
@@ -99,6 +100,19 @@ foreach ($call->arguments as $argument) {
 `fromNode()` throws when its input is not a supported call node or the retained node is missing the expected call structure. `fromExpression()` unwraps expression and call wrappers and returns `null` when the selection is not a supported call.
 
 For analyzer providers, prefer the semantic `Invocation` supplied by the provider context. `CallExpression` is primarily useful to syntax-driven linter and analysis hooks.
+
+## Selecting one argument
+
+`argument()` selects by positional position or by name:
+
+```php
+// f($a, b: $b, $c)
+$call->argument(1);        // $c — the second positional argument
+$call->argument('b');      // $b — by name
+$call->arguments[1];       // $b — the second *written* argument
+```
+
+An integer selector counts positional arguments only, and matches `CallArgument::$position`. `CallArgument::$index` is the source-order index instead, named arguments included, so the two diverge as soon as a named argument is written before a positional one. A named argument has no position, so `$position` is `null` for it.
 
 ## Generated node kinds
 

@@ -5,16 +5,13 @@ declare(strict_types=1);
 namespace Mago\Sdk\Syntax;
 
 use Mago\Sdk\Exception\InvalidArgumentException;
-
-use function count;
-use function str_starts_with;
+use Mago\Sdk\Internal\Syntax\NodeReader;
 
 /**
  * A structured view over a function, method, or static-method call.
  *
  * @api
  * @mago-expect lint:cyclomatic-complexity
- * @mago-expect lint:kan-defect
  */
 final class CallExpression
 {
@@ -47,7 +44,7 @@ final class CallExpression
 
         $children = $source->getChildren($node);
         $function = $node->kind === NodeKind::FunctionCall;
-        $callee = self::unwrapExpression(
+        $callee = NodeReader::unwrapExpression(
             $source,
             $children[0] ?? throw new InvalidArgumentException('A call node has no callee.'),
         );
@@ -57,40 +54,24 @@ final class CallExpression
             throw new InvalidArgumentException('A call node has no argument list.');
         }
 
-        $arguments = [];
-        foreach ($source->getChildren($argumentList) as $argument) {
-            $variant = $source->getChildren($argument)[0] ?? null;
-            if ($variant === null) {
-                continue;
-            }
-            $parts = $source->getChildren($variant);
-            $named = $variant->kind === NodeKind::NamedArgument;
-            $value = $parts[$named ? 1 : 0] ?? null;
-            if ($value === null) {
-                continue;
-            }
-            $value = self::unwrapExpression($source, $value);
-            $arguments[] = new CallArgument(
-                count($arguments),
-                $argument,
-                $value,
-                $named ? $source->getText($parts[0]) : null,
-                str_starts_with($source->getText($variant), '...'),
-            );
-        }
-
-        return new self($node, $callee, $function ? null : $callee, $member, $arguments);
+        return new self(
+            $node,
+            $callee,
+            $function ? null : $callee,
+            $member,
+            NodeReader::readArgumentList($source, $argumentList),
+        );
     }
 
     public static function fromExpression(SourceFile $source, Node $node): ?self
     {
-        $node = self::unwrapExpression($source, $node);
+        $node = NodeReader::unwrapExpression($source, $node);
         while ($node->kind === NodeKind::Call) {
             $next = $source->getChildren($node)[0] ?? null;
             if ($next === null) {
                 break;
             }
-            $node = self::unwrapExpression($source, $next);
+            $node = NodeReader::unwrapExpression($source, $next);
         }
 
         return match ($node->kind) {
@@ -116,6 +97,17 @@ final class CallExpression
     public function isMethod(): bool
     {
         return $this->node->kind === NodeKind::MethodCall || $this->node->kind === NodeKind::NullSafeMethodCall;
+    }
+
+    /**
+     * Selects one argument by positional position, or by name. `argument(1)` on
+     * `f($a, b: $b, $c)` is `$c`; read `CallArgument::$index` for source order.
+     *
+     * @param non-negative-int|string $selector
+     */
+    public function argument(int|string $selector): ?CallArgument
+    {
+        return NodeReader::selectArgument($this->arguments, $selector);
     }
 
     public function getName(SourceFile $source): ?string
@@ -150,18 +142,5 @@ final class CallExpression
         }
 
         return $source->getText($selector);
-    }
-
-    private static function unwrapExpression(SourceFile $source, Node $node): Node
-    {
-        while ($node->kind === NodeKind::Expression) {
-            $next = $source->getChildren($node)[0] ?? null;
-            if ($next === null) {
-                break;
-            }
-            $node = $next;
-        }
-
-        return $node;
     }
 }
